@@ -1,7 +1,6 @@
 module main_top #(
-  parameter int SRAM_ADDRESS_WIDTH = 12,
-  parameter int SRAM_DATA_WIDTH    = 64,
-  parameter int KERNEL_DATA_WIDTH  = 8
+  parameter int SRAM_ADDRESS_WIDTH = 7, // 32x32 (128 values) 
+  parameter int SRAM_DATA_WIDTH    = 64 // One row contains 64 bits (8 bytes) of elements
 )(
   input  logic clk,
   input  logic reset_n,
@@ -21,8 +20,7 @@ module main_top #(
   logic [SRAM_DATA_WIDTH-1:0]    write_data;
   logic                          write_enable;
 
-  // Full precision convolution results
-  logic  [20:0] conv_results [0:4];
+  logic [19:0] conv_results [0:4]; //The Convolution output can use 20-bits values to deal with the overflow, and we will truncate(clamp) the value back to an 8-bit signed value at the end
   logic [7:0]  conv_results_trunc [0:4];
   
   // ===================================
@@ -99,13 +97,13 @@ module main_top #(
   // ===================================
   // Kernel Storage
   // ===================================
-  logic  [KERNEL_DATA_WIDTH-1:0] kernel [0:3][0:3];
-  logic [1:0] row_reg_next;
-  logic [1:0] row_reg;
+  logic [7:0] kernel [0:3][0:3];
+  logic [1:0] row_reg_next; //counter
+  logic [1:0] row_reg;      //counter
 
   always_comb begin
     if    (read_valid && (row_reg < 2)) row_reg_next =row_reg + 1; 
-    else                               row_reg_next =row_reg;
+    else                                row_reg_next =row_reg;
   end
   always_ff @(posedge clk or negedge reset_n) begin
     if (~reset_n) row_reg <= '0;
@@ -138,10 +136,10 @@ module main_top #(
   // ===================================
   // Sliding Line Buffers
   // ===================================
-  logic  [7:0] line1 [0:7];
-  logic  [7:0] line2 [0:7];
-  logic  [7:0] line3 [0:7];
-  logic  [7:0] line4 [0:7];
+  logic [7:0] line1 [0:7];
+  logic [7:0] line2 [0:7];
+  logic [7:0] line3 [0:7];
+  logic [7:0] line4 [0:7];
 
   always_ff @(posedge clk or negedge reset_n) begin
     if (~reset_n) begin
@@ -151,7 +149,7 @@ module main_top #(
         line3[i] <= '0; 
         line4[i] <= '0;
       end
-    end else if (read_valid && addr_counter_reg >= 'h18) begin
+    end else if (read_valid && read_address >= 'h18) begin
       // Shift lines upward and insert new line at bottom
       for (int i = 0; i < 8; i++) begin
         line1[i] <= line2[i];
@@ -210,12 +208,13 @@ module main_top #(
       write_enable  <= '0;
       write_address <= '0;
       write_data    <= '0;
-    end else if (line1_changed_comb) begin
+    end else if (line1_changed_comb || (line1[0]==='h7F)) begin
       write_enable  <= 1'b1;
       write_address <= write_address + 1;
       write_data    <= {conv_results_trunc[4], conv_results_trunc[3],
                         conv_results_trunc[2], conv_results_trunc[1],
                         conv_results_trunc[0], 24'b0};
+    //TODO: Need to pad 3 lines 
     end else begin
       write_enable <= 1'b0;
     end
